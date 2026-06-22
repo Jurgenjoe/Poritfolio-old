@@ -715,6 +715,17 @@
   }
   .toast-alert .ta-title { font-family: var(--font-mono); font-weight: 700; color: var(--accent); font-size: 0.85rem; margin-bottom: 4px; }
   .toast-alert .ta-body { font-size: 0.82rem; color: var(--text); }
+
+  /* INDICATOR PANEL */
+  .ind-group { display: flex; gap: 4px; background: var(--surface2); border-radius: 8px; padding: 3px; }
+  .ind-btn {
+    background: transparent; border: none; color: var(--muted);
+    font-family: var(--font-mono); font-size: 0.68rem; font-weight: 700;
+    padding: 5px 9px; border-radius: 6px; cursor: pointer; transition: all 0.15s;
+  }
+  .ind-btn:hover { color: var(--text); }
+  .ind-btn.active { background: var(--gold); color: #0a0c10; }
+  .rsi-pane { margin-top: 6px; }
 </style>
 </head>
 <body>
@@ -922,6 +933,13 @@
           <button class="tf-btn" data-tf="5Y">5Y</button>
         </div>
         <div class="tool-sep"></div>
+        <div class="ind-group" id="indGroup">
+          <button class="ind-btn" data-ind="ema9" onclick="toggleIndicator('ema9')">EMA9</button>
+          <button class="ind-btn" data-ind="ema21" onclick="toggleIndicator('ema21')">EMA21</button>
+          <button class="ind-btn" data-ind="sma50" onclick="toggleIndicator('sma50')">SMA50</button>
+          <button class="ind-btn" data-ind="rsi" onclick="toggleIndicator('rsi')">RSI</button>
+        </div>
+        <div class="tool-sep"></div>
         <button class="tool-btn" id="toolCursor" title="เลื่อนดู (Cursor)" onclick="setDrawTool('cursor')">
           ↖<span class="tool-label">เลื่อนดู</span>
         </button>
@@ -946,6 +964,9 @@
         <div class="chart-hint" id="chartHint">เลื่อนดูกราฟ</div>
         <div class="crosshair-readout" id="crosshairReadout"></div>
         <canvas id="candleCanvas" height="420"></canvas>
+      </div>
+      <div class="chart-wrap rsi-pane" id="rsiPaneWrap" style="display:none;padding-top:8px">
+        <canvas id="rsiCanvas" height="110"></canvas>
       </div>
 
       <!-- Range Controls Below Chart -->
@@ -1985,7 +2006,8 @@ const detailState = {
   hoverIdx: -1,
   candleW: 0,
   alerts: [],          // {id, ticker, cond:'above'|'below', price, triggered}
-  dataSource: null     // 'real' (Finnhub) | 'mock' (fallback simulated)
+  dataSource: null,    // 'real' (Finnhub) | 'mock' (fallback simulated)
+  indicators: { ema9:false, ema21:false, sma50:false, rsi:false }
 };
 let detailResizeObs = null;
 
@@ -2299,8 +2321,60 @@ function clearAllDrawings() {
   drawChart();
 }
 
+// ---- Indicators: EMA / SMA / RSI ----
+function toggleIndicator(key) {
+  detailState.indicators[key] = !detailState.indicators[key];
+  document.querySelector(`.ind-btn[data-ind="${key}"]`).classList.toggle('active', detailState.indicators[key]);
+  document.getElementById('rsiPaneWrap').style.display = detailState.indicators.rsi ? 'block' : 'none';
+  if (detailState.indicators.rsi) setupRsiCanvas();
+  drawChart();
+}
+function calcEMA(closes, period) {
+  const k = 2/(period+1);
+  const out = new Array(closes.length).fill(null);
+  let ema = null;
+  closes.forEach((c,i)=>{
+    if (i < period-1) return;
+    if (ema === null) {
+      ema = closes.slice(0,period).reduce((a,b)=>a+b,0)/period;
+    } else {
+      ema = c*k + ema*(1-k);
+    }
+    out[i] = ema;
+  });
+  return out;
+}
+function calcSMA(closes, period) {
+  const out = new Array(closes.length).fill(null);
+  for (let i=period-1;i<closes.length;i++) {
+    let sum=0; for(let j=i-period+1;j<=i;j++) sum+=closes[j];
+    out[i] = sum/period;
+  }
+  return out;
+}
+function calcRSI(closes, period=14) {
+  const out = new Array(closes.length).fill(null);
+  if (closes.length < period+1) return out;
+  let gains=0, losses=0;
+  for (let i=1;i<=period;i++) {
+    const diff = closes[i]-closes[i-1];
+    if (diff>=0) gains+=diff; else losses-=diff;
+  }
+  let avgGain = gains/period, avgLoss = losses/period;
+  out[period] = avgLoss===0 ? 100 : 100 - (100/(1+avgGain/avgLoss));
+  for (let i=period+1;i<closes.length;i++) {
+    const diff = closes[i]-closes[i-1];
+    const gain = diff>0?diff:0, loss = diff<0?-diff:0;
+    avgGain = (avgGain*(period-1)+gain)/period;
+    avgLoss = (avgLoss*(period-1)+loss)/period;
+    out[i] = avgLoss===0 ? 100 : 100 - (100/(1+avgGain/avgLoss));
+  }
+  return out;
+}
+
 // ---- Canvas setup & rendering ----
 let dctx = null, dcanvas = null, DPR = 1;
+let rctx = null, rcanvas = null;
 function setupCanvas() {
   dcanvas = document.getElementById('candleCanvas');
   const wrap = dcanvas.parentElement;
@@ -2313,6 +2387,19 @@ function setupCanvas() {
   dcanvas.height = cssH * DPR;
   dctx = dcanvas.getContext('2d');
   dctx.setTransform(DPR,0,0,DPR,0,0);
+}
+function setupRsiCanvas() {
+  rcanvas = document.getElementById('rsiCanvas');
+  if (!rcanvas) return;
+  const wrap = rcanvas.parentElement;
+  const cssW = wrap.clientWidth - 28;
+  const cssH = 110;
+  rcanvas.style.width = cssW + 'px';
+  rcanvas.style.height = cssH + 'px';
+  rcanvas.width = cssW * DPR;
+  rcanvas.height = cssH * DPR;
+  rctx = rcanvas.getContext('2d');
+  rctx.setTransform(DPR,0,0,DPR,0,0);
 }
 
 function priceToY(price, view, h) {
@@ -2328,26 +2415,38 @@ function xToIdx(x, view, w) {
   return view.xMin + (x / w) * (view.xMax - view.xMin);
 }
 
+// Right-axis price gutter width (px) reserved on the right side of the chart
+const AXIS_GUTTER = 64;
+
 function drawChart() {
   if (!dctx || !dcanvas) return;
-  const w = dcanvas.width / DPR, h = dcanvas.height / DPR;
-  dctx.clearRect(0,0,w,h);
+  const fullW = dcanvas.width / DPR, h = dcanvas.height / DPR;
+  const w = fullW - AXIS_GUTTER; // plotting area excludes the right price axis gutter
+  dctx.clearRect(0,0,fullW,h);
   const candles = detailState.candles;
   if (!candles.length) return;
   const view = detailState.view;
 
-  // grid
+  // grid + right-side price axis
   dctx.strokeStyle = 'rgba(255,255,255,0.05)';
   dctx.lineWidth = 1;
-  const gridLines = 5;
+  const gridLines = 6;
   for (let i=0;i<=gridLines;i++) {
     const y = (h/gridLines)*i;
     dctx.beginPath(); dctx.moveTo(0,y); dctx.lineTo(w,y); dctx.stroke();
     const price = yToPrice(y, view, h);
-    dctx.fillStyle = '#5a6478';
-    dctx.font = '10px "Space Mono", monospace';
-    dctx.fillText('$'+price.toFixed(2), 6, y-4 < 10 ? 12 : y-4);
+    // axis background chip
+    dctx.fillStyle = '#181d24';
+    dctx.fillRect(w+1, Math.max(0,y-9), AXIS_GUTTER-1, 18);
+    dctx.fillStyle = '#cfd6e3';
+    dctx.font = 'bold 12px "Space Mono", monospace';
+    dctx.textAlign = 'left';
+    const py = i===0 ? 12 : (i===gridLines ? h-4 : y+4);
+    dctx.fillText('$'+price.toFixed(2), w+8, py);
   }
+  // separator line between plot and axis
+  dctx.strokeStyle = 'rgba(255,255,255,0.1)';
+  dctx.beginPath(); dctx.moveTo(w,0); dctx.lineTo(w,h); dctx.stroke();
 
   // candles
   const visibleN = Math.max(1, view.xMax - view.xMin);
@@ -2375,6 +2474,26 @@ function drawChart() {
     const bodyTop = Math.min(yO,yC), bodyH = Math.max(1, Math.abs(yO-yC));
     dctx.fillRect(x - candleW/2, bodyTop, candleW, bodyH);
   }
+
+  // ---- Indicator overlays (EMA9 / EMA21 / SMA50) ----
+  const closes = candles.map(k=>k.c);
+  function plotLine(series, color) {
+    dctx.strokeStyle = color;
+    dctx.lineWidth = 1.6;
+    dctx.beginPath();
+    let started = false;
+    for (let i = startI; i <= endI; i++) {
+      const v = series[i];
+      if (v == null) continue;
+      const x = idxToX(i, view, w);
+      const y = priceToY(v, view, h);
+      if (!started) { dctx.moveTo(x,y); started = true; } else { dctx.lineTo(x,y); }
+    }
+    if (started) dctx.stroke();
+  }
+  if (detailState.indicators.ema9) plotLine(calcEMA(closes,9), '#f5c842');
+  if (detailState.indicators.ema21) plotLine(calcEMA(closes,21), '#0099ff');
+  if (detailState.indicators.sma50) plotLine(calcSMA(closes,50), '#ff6b35');
 
   // x-axis date labels
   {
@@ -2415,10 +2534,9 @@ function drawChart() {
       dctx.fillStyle = d.color || '#f5c842';
       dctx.font = 'bold 10px "Space Mono", monospace';
       const label = '$'+d.p1.price.toFixed(2);
-      const tw = dctx.measureText(label).width;
-      dctx.fillRect(w-tw-12, y-9, tw+10, 14);
+      dctx.fillRect(w+1, y-9, AXIS_GUTTER-1, 18);
       dctx.fillStyle = '#0a0c10';
-      dctx.fillText(label, w-tw-7, y+2);
+      dctx.fillText(label, w+8, y+3);
     } else if (d.type === 'trend') {
       const x1 = idxToX(d.p1.i, view, w), y1 = priceToY(d.p1.price, view, h);
       const x2 = idxToX(d.p2.i, view, w), y2 = priceToY(d.p2.price, view, h);
@@ -2462,10 +2580,60 @@ function drawChart() {
       dctx.beginPath(); dctx.moveTo(x,0); dctx.lineTo(x,h); dctx.stroke();
       if (detailState._hoverY != null) {
         dctx.beginPath(); dctx.moveTo(0,detailState._hoverY); dctx.lineTo(w,detailState._hoverY); dctx.stroke();
+        // highlighted price chip at crosshair y, on the axis
+        const hoverPrice = yToPrice(detailState._hoverY, view, h);
+        dctx.setLineDash([]);
+        dctx.fillStyle = '#0099ff';
+        dctx.fillRect(w+1, detailState._hoverY-9, AXIS_GUTTER-1, 18);
+        dctx.fillStyle = '#fff';
+        dctx.font = 'bold 12px "Space Mono", monospace';
+        dctx.fillText('$'+hoverPrice.toFixed(2), w+8, detailState._hoverY+3);
       }
       dctx.setLineDash([]);
     }
   }
+
+  if (detailState.indicators.rsi) drawRsiPane(startI, endI, view);
+}
+
+function drawRsiPane(startI, endI, view) {
+  if (!rctx || !rcanvas) return;
+  const fullW = rcanvas.width/DPR, h = rcanvas.height/DPR;
+  const w = fullW - AXIS_GUTTER;
+  rctx.clearRect(0,0,fullW,h);
+  const closes = detailState.candles.map(k=>k.c);
+  const rsi = calcRSI(closes,14);
+
+  // gridlines at 30/50/70
+  [30,50,70].forEach(level=>{
+    const y = h - (level/100)*h;
+    rctx.strokeStyle = level===50 ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.05)';
+    rctx.beginPath(); rctx.moveTo(0,y); rctx.lineTo(w,y); rctx.stroke();
+    rctx.fillStyle = '#181d24';
+    rctx.fillRect(w+1, y-8, AXIS_GUTTER-1, 16);
+    rctx.fillStyle = '#cfd6e3';
+    rctx.font = '10px "Space Mono", monospace';
+    rctx.fillText(level, w+8, y+3);
+  });
+  rctx.strokeStyle = 'rgba(255,255,255,0.1)';
+  rctx.beginPath(); rctx.moveTo(w,0); rctx.lineTo(w,h); rctx.stroke();
+
+  rctx.strokeStyle = '#0099ff';
+  rctx.lineWidth = 1.6;
+  rctx.beginPath();
+  let started = false;
+  for (let i = startI; i <= endI; i++) {
+    const v = rsi[i];
+    if (v == null) continue;
+    const x = idxToX(i, view, w);
+    const y = h - (v/100)*h;
+    if (!started) { rctx.moveTo(x,y); started = true; } else { rctx.lineTo(x,y); }
+  }
+  if (started) rctx.stroke();
+
+  rctx.fillStyle = '#5a6478';
+  rctx.font = '9px "Space Mono", monospace';
+  rctx.fillText('RSI(14)', 6, 12);
 }
 
 // ---- mouse interaction: pan/zoom, drawing ----
@@ -2473,10 +2641,12 @@ function attachCanvasEvents() {
   const cv = document.getElementById('candleCanvas');
   let isPanning = false, panStartX = 0, panStartView = null;
 
+  function plotWidth(rect) { return rect.width - AXIS_GUTTER; }
+
   cv.onmousedown = (e) => {
     const rect = cv.getBoundingClientRect();
     const x = e.clientX - rect.left, y = e.clientY - rect.top;
-    const w = rect.width, h = rect.height;
+    const w = plotWidth(rect), h = rect.height;
     const i = xToIdx(x, detailState.view, w);
     const price = yToPrice(y, detailState.view, h);
 
@@ -2510,7 +2680,7 @@ function attachCanvasEvents() {
   cv.onmousemove = (e) => {
     const rect = cv.getBoundingClientRect();
     const x = e.clientX - rect.left, y = e.clientY - rect.top;
-    const w = rect.width, h = rect.height;
+    const w = plotWidth(rect), h = rect.height;
     detailState.hoverIdx = xToIdx(x, detailState.view, w);
     detailState._hoverY = y;
 
@@ -2525,7 +2695,7 @@ function attachCanvasEvents() {
     }
 
     if (isPanning) {
-      const w2 = rect.width;
+      const w2 = plotWidth(rect);
       const dx = x - panStartX;
       const shift = -(dx / w2) * (panStartView.xMax - panStartView.xMin);
       let xMin = panStartView.xMin + shift, xMax = panStartView.xMax + shift;
@@ -2544,16 +2714,21 @@ function attachCanvasEvents() {
     e.preventDefault();
     const rect = cv.getBoundingClientRect();
     const x = e.clientX - rect.left;
-    const w = rect.width;
+    const w = plotWidth(rect);
+    const candles = detailState.candles;
+    if (!candles.length) return;
     const centerI = xToIdx(x, detailState.view, w);
     const zoom = e.deltaY > 0 ? 1.12 : 0.89;
     let { xMin, xMax } = detailState.view;
     let newMin = centerI - (centerI - xMin) * zoom;
     let newMax = centerI + (xMax - centerI) * zoom;
-    if (newMax - newMin < 8) return;
+    // Minimum visible span scales with dataset size so zoom-out isn't clamped
+    // to a tiny window on timeframes with few candles (e.g. 1D, 5Y monthly bars).
+    const minSpan = Math.max(3, Math.min(8, candles.length - 1));
+    if (newMax - newMin < minSpan) return;
     if (newMin < 0) newMin = 0;
-    if (newMax > detailState.candles.length - 1) newMax = detailState.candles.length - 1;
-    if (newMax - newMin < 8) return;
+    if (newMax > candles.length - 1) newMax = candles.length - 1;
+    if (newMax - newMin < minSpan) return;
     detailState.view.xMin = newMin; detailState.view.xMax = newMax;
     drawChart();
   };
@@ -2567,13 +2742,25 @@ function zoomOutChart() {
   const v = detailState.view;
   const span = v.xMax - v.xMin;
   const center = (v.xMin + v.xMax) / 2;
-  let newSpan = span * 1.5;
+  let newSpan = span * 1.6;
+  // allow zooming out to the FULL dataset regardless of timeframe
+  const maxSpan = c.length - 1;
+  if (newSpan > maxSpan) newSpan = maxSpan;
   let newMin = center - newSpan / 2;
   let newMax = center + newSpan / 2;
+  if (newMin < 0) { newMax -= newMin; newMin = 0; }
+  if (newMax > maxSpan) { newMin -= (newMax - maxSpan); newMax = maxSpan; }
   if (newMin < 0) newMin = 0;
-  if (newMax > c.length - 1) newMax = c.length - 1;
   detailState.view.xMin = newMin;
   detailState.view.xMax = newMax;
+  // re-fit Y range to whatever is now visible so candles aren't squashed
+  let lo = Infinity, hi = -Infinity;
+  for (let i = Math.max(0, Math.floor(newMin)); i <= Math.min(c.length-1, Math.ceil(newMax)); i++) {
+    lo = Math.min(lo, c[i].l); hi = Math.max(hi, c[i].h);
+  }
+  const pad = (hi-lo)*0.08 || hi*0.02;
+  detailState.view.yMin = lo - pad;
+  detailState.view.yMax = hi + pad;
   drawChart();
 }
 
@@ -2889,8 +3076,6 @@ if (sessionStorage.getItem('portfolio_auth') === '1') {
   document.getElementById('loginOverlay').classList.add('hidden');
   loadFromSupabase();
 }
-
-
 
 </script>
 </body>
