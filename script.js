@@ -3155,29 +3155,45 @@ async function fetchGoldPrice() {
   // ---- 1) แหล่งหลัก: สมาคมค้าทองคำ (Gold Traders Association of Thailand) ----
   // ราคาทองคำแท่ง 96.5% ที่ร้านทองทั่วประเทศใช้อ้างอิงจริง (ไม่ใช่ค่าประมาณจากราคาทองโลก)
   // ดึงผ่าน community API ที่ crawl ข้อมูลจาก goldtraders.or.th โดยตรง
-  const officialSources = [
-    { url: 'https://api.chnwt.dev/thai-gold-api/latest', label: 'สมาคมค้าทองคำ (goldtraders.or.th)' },
-    { url: 'https://thai-gold-api.vercel.app/latest', label: 'สมาคมค้าทองคำ (mirror)' },
+  //
+  // หมายเหตุ: ลองตรงๆ ก่อน แล้วถ้าติด CORS (เบราว์เซอร์บล็อกเพราะปลายทางไม่ส่ง
+  // Access-Control-Allow-Origin) ค่อยลองผ่าน public CORS proxy เป็นทางสำรอง —
+  // ทั้งสองแบบดึงจากแหล่งข้อมูลเดียวกัน แค่เส้นทางการเชื่อมต่อต่างกัน
+  function extractGoldBar(d) {
+    const bar = d?.response?.price?.gold_bar;
+    if (d?.status !== 'success' || !bar?.buy || !bar?.sell) return null;
+    const buy = parseFloat(String(bar.buy).replace(/,/g, ''));
+    const sell = parseFloat(String(bar.sell).replace(/,/g, ''));
+    if (!(buy > 0 && sell > 0)) return null;
+    return { buy, sell, updated: [d.response.update_date, d.response.update_time].filter(Boolean).join(' ') };
+  }
+
+  const CHNWT_URL = 'https://api.chnwt.dev/thai-gold-api/latest';
+  const attempts = [
+    { url: CHNWT_URL, label: 'สมาคมค้าทองคำ (goldtraders.or.th)' },
+    { url: 'https://api.allorigins.win/raw?url=' + encodeURIComponent(CHNWT_URL), label: 'สมาคมค้าทองคำ (ผ่าน CORS proxy)' },
   ];
-  for (const src of officialSources) {
+  for (const src of attempts) {
     try {
       const r = await fetch(src.url);
-      if (!r.ok) continue;
+      if (!r.ok) { console.warn(`[Gold] ${src.label} -> HTTP ${r.status}`); continue; }
       const d = await r.json();
-      const bar = d?.response?.price?.gold_bar;
-      if (d.status === 'success' && bar?.buy && bar?.sell) {
-        const buy = parseFloat(String(bar.buy).replace(/,/g, ''));
-        const sell = parseFloat(String(bar.sell).replace(/,/g, ''));
-        if (buy > 0 && sell > 0) {
-          GOLD_PRICE_BUY_THB = buy;
-          GOLD_PRICE_SELL_THB = sell;
-          GOLD_PRICE_THB = buy; // มูลค่าพอร์ต = ราคารับซื้อ (สิ่งที่จะได้จริงถ้าขายวันนี้)
-          GOLD_PRICE_SOURCE = src.label;
-          GOLD_PRICE_UPDATED = [d.response.update_date, d.response.update_time].filter(Boolean).join(' ');
-          return GOLD_PRICE_THB;
-        }
+      const parsed = extractGoldBar(d);
+      if (parsed) {
+        GOLD_PRICE_BUY_THB = parsed.buy;
+        GOLD_PRICE_SELL_THB = parsed.sell;
+        GOLD_PRICE_THB = parsed.buy; // มูลค่าพอร์ต = ราคารับซื้อ (สิ่งที่จะได้จริงถ้าขายวันนี้)
+        GOLD_PRICE_SOURCE = src.label;
+        GOLD_PRICE_UPDATED = parsed.updated;
+        console.log(`[Gold] ✅ ${src.label}: buy=${parsed.buy} sell=${parsed.sell}`);
+        return GOLD_PRICE_THB;
       }
-    } catch (e) { console.warn('[Gold] source failed:', src.url, e.message); }
+      console.warn(`[Gold] ${src.label} -> response shape unexpected:`, d);
+    } catch (e) {
+      // ชนิด error ที่เห็นในคอนโซลตรงนี้คือเบาะแสสำคัญ: "Failed to fetch" มักแปลว่า CORS
+      // ถูกบล็อก, ส่วน error เกี่ยวกับ JSON.parse แปลว่าปลายทางไม่ได้ตอบเป็น JSON จริง
+      console.warn(`[Gold] ${src.label} failed:`, e.message);
+    }
   }
 
   // ---- 2) สำรองสุดท้าย: ประมาณการจากราคาทองโลก (Spot) แปลงเป็น THB/บาท ----
@@ -3198,6 +3214,7 @@ async function fetchGoldPrice() {
         GOLD_PRICE_THB = est;
         GOLD_PRICE_SOURCE = '⚠️ ประมาณการจากราคาทองโลก (ดึงราคาสมาคมค้าทองคำไม่สำเร็จ)';
         GOLD_PRICE_UPDATED = new Date().toLocaleString('th-TH');
+        console.log('[Gold] ใช้ค่าประมาณการจาก spot price:', est);
         return GOLD_PRICE_THB;
       }
     } catch (e) { continue; }
