@@ -120,4 +120,5 @@ jobs:
           git config user.email "actions@users.noreply.github.com"
           git add gold-price.json
           git diff --cached --quiet || git commit -m "อัปเดตราคาทอง $(date +'%Y-%m-%d %H:%M')"
+          git pull --rebase origin main
           git push
