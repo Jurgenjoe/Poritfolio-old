@@ -44,14 +44,27 @@ jobs:
                   'Referer': 'https://www.google.co.th/',
               })
               # หาราคาทองคำแท่ง (buy/sell) จาก HTML
-              # pattern: ราคาเช่น 47,650 หรือ 47650
-              nums = re.findall(r'(\d{2},\d{3}|\d{5})', html)
-              gold_nums = [int(n.replace(',','')) for n in nums if 40000 <= int(n.replace(',','')) <= 60000]
-              if len(gold_nums) >= 2:
-                  buy  = gold_nums[0]
-                  sell = gold_nums[1]
-                  source = 'goldtraders.or.th (scraped)'
-                  print(f'[1] goldtraders scrape OK: buy={buy} sell={sell}')
+              # วิธีที่แม่นยำกว่า: หาคู่ตัวเลขที่อยู่ติดกัน (buy, sell) ในรูปแบบ
+              # "XX,XXX.XX</td>...<td>XX,XXX.XX" รอบๆ คำว่า "ทองคำแท่ง"
+              # แทนการกวาดทุกตัวเลขในหน้า (ซึ่งโดนปนกับราคาย้อนหลัง/ปี พ.ศ./โฆษณา)
+              idx = html.find('ทองคำแท่ง')
+              search_zone = html[idx:idx+1500] if idx != -1 else html
+
+              # จับคู่ราคาที่เป็นทศนิยม .00 ติดกัน 2 ค่า (buy, sell) ซึ่งเป็นรูปแบบที่
+              # goldtraders.or.th ใช้แสดงผลเสมอ และกว้างพอรับราคาทองได้ทุกช่วง (ไม่ผูกกับ range ตายตัว)
+              pairs = re.findall(
+                  r'(\d{1,3}(?:,\d{3})*\.\d{2})\D{1,40}?(\d{1,3}(?:,\d{3})*\.\d{2})',
+                  search_zone
+              )
+              for b_str, s_str in pairs:
+                  b = float(b_str.replace(',', ''))
+                  s = float(s_str.replace(',', ''))
+                  # buy ต้องน้อยกว่า sell เสมอ (กฎพื้นฐานของราคาซื้อ-ขาย) และต้องอยู่ในช่วงราคาทองที่สมเหตุสมผล
+                  if 20000 <= b <= 150000 and 20000 <= s <= 150000 and s > b and (s - b) < 1000:
+                      buy, sell = round(b), round(s)
+                      source = 'goldtraders.or.th (scraped)'
+                      print(f'[1] goldtraders scrape OK: buy={buy} sell={sell}')
+                      break
           except Exception as e:
               print(f'[1] goldtraders scrape failed: {e}')
 
