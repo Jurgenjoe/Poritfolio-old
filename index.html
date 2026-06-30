@@ -56,6 +56,9 @@
       <option value="THB">THB</option>
     </select>
     <button class="btn btn-outline" id="refreshBtn" onclick="fetchRealPrices()" title="ดึงราคาจริงจาก Yahoo Finance">🔄 Refresh</button>
+    <button class="btn btn-outline" onclick="backupAllData()" title="ดาวน์โหลดข้อมูลทั้งหมดเป็นไฟล์สำรอง">💾 Backup</button>
+    <button class="btn btn-outline" onclick="document.getElementById('restoreFileInput').click()" title="กู้คืนข้อมูลจากไฟล์สำรอง">📥 Restore</button>
+    <input type="file" id="restoreFileInput" accept="application/json" style="display:none" onchange="restoreAllData(event)">
     <button class="btn btn-primary" onclick="openModal()">+ เพิ่มหุ้น</button>
   </div>
 </div>
@@ -71,6 +74,8 @@
   <button class="tab-btn" onclick="switchTab('assets')">🏦 สินทรัพย์อื่น</button>
   <button class="tab-btn" onclick="switchTab('import')">📄 Import PDF</button>
   <button class="tab-btn" onclick="switchTab('gold')">🥇 ออมทอง</button>
+  <button class="tab-btn" onclick="switchTab('news')">📰 ข่าว</button>
+  <button class="tab-btn" onclick="switchTab('feargreed')">😨 Fear &amp; Greed</button>
 </div>
 
 <!-- ===== TAB: PORTFOLIO (existing) ===== -->
@@ -245,6 +250,34 @@
   </div>
   <div class="summary-grid" id="goldCards"></div>
 
+  <!-- Gold calculator -->
+  <div class="chart-card" style="margin-top:18px">
+    <div class="chart-title">🧮 คำนวณซื้อทอง</div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px">
+      <input class="search-box" type="number" id="gc_price" placeholder="ราคาทอง (THB/บาท)" style="max-width:200px" oninput="calcGoldFromAmount()">
+      <button class="btn btn-outline" onclick="useCurrentGoldPriceInCalc()">📡 ใช้ราคาปัจจุบัน</button>
+    </div>
+    <div style="display:flex;gap:24px;flex-wrap:wrap;margin-top:14px">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <span style="color:var(--muted);font-size:0.85rem">มีเงิน</span>
+        <input class="search-box" type="number" id="gc_amount" placeholder="จำนวนเงิน (THB)" style="max-width:180px" oninput="calcGoldFromAmount()">
+        <span style="color:var(--muted);font-size:0.85rem">→ ได้ทองกี่บาท/กรัม</span>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <span style="color:var(--muted);font-size:0.85rem">อยากได้ทอง</span>
+        <input class="search-box" type="number" id="gc_weight" placeholder="น้ำหนัก" style="max-width:140px" oninput="calcGoldFromWeight()">
+        <select class="dropdown" id="gc_weightUnit" onchange="calcGoldFromWeight()">
+          <option value="baht">บาททอง</option>
+          <option value="gram">กรัม</option>
+        </select>
+        <span style="color:var(--muted);font-size:0.85rem">→ ใช้เงินเท่าไหร่</span>
+      </div>
+    </div>
+    <div id="gc_result" style="margin-top:14px;font-size:0.95rem;line-height:1.6">
+      <span style="color:var(--muted)">กรอกจำนวนเงินหรือน้ำหนักด้านบนเพื่อคำนวณ</span>
+    </div>
+  </div>
+
   <!-- Add form -->
   <div class="chart-card" style="margin-top:18px">
     <div class="chart-title">➕ เพิ่มรายการซื้อทอง</div>
@@ -277,6 +310,85 @@
       </tr></thead>
       <tbody id="goldBody"></tbody>
     </table>
+  </div>
+</div>
+</div>
+
+<!-- ===== TAB: NEWS / EARNINGS ===== -->
+<div id="tab_news" class="tab-page">
+<div class="main">
+  <div class="page-header" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+    <h2>📰 ข่าว &amp; ปฏิทินผลประกอบการ</h2>
+    <button class="btn-icon" onclick="refreshNewsTab()" title="รีเฟรช" style="margin-left:auto">🔄</button>
+  </div>
+
+  <div class="news-tabs" style="display:flex;gap:8px;margin:14px 0;flex-wrap:wrap">
+    <button class="import-tab-btn active" id="newsSubBtn_holdings" onclick="switchNewsSub('holdings')">📌 ข่าวหุ้นที่ถือ</button>
+    <button class="import-tab-btn" id="newsSubBtn_market" onclick="switchNewsSub('market')">🌐 ข่าวภาพรวมตลาด</button>
+    <button class="import-tab-btn" id="newsSubBtn_calendar" onclick="switchNewsSub('calendar')">📅 ปฏิทิน Earnings</button>
+  </div>
+
+  <div id="newsSub_holdings" class="news-sub-page">
+    <div id="newsHoldingsList" class="chart-card">
+      <div style="color:var(--muted);text-align:center;padding:24px">⏳ กำลังโหลดข่าว...</div>
+    </div>
+  </div>
+
+  <div id="newsSub_market" class="news-sub-page" style="display:none">
+    <div id="newsMarketList" class="chart-card">
+      <div style="color:var(--muted);text-align:center;padding:24px">⏳ กำลังโหลดข่าว...</div>
+    </div>
+  </div>
+
+  <div id="newsSub_calendar" class="news-sub-page" style="display:none">
+    <div id="earningsCalendarList" class="chart-card">
+      <div style="color:var(--muted);text-align:center;padding:24px">⏳ กำลังโหลดปฏิทิน...</div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ===== TAB: FEAR & GREED (VIX-based) ===== -->
+<div id="tab_feargreed" class="tab-page">
+<div class="main">
+  <div class="page-header" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+    <h2>😨 Fear &amp; Greed Index (อิงจาก VIX)</h2>
+    <button class="btn-icon" onclick="fetchVixFearGreed()" title="รีเฟรช" style="margin-left:auto">🔄</button>
+  </div>
+
+  <div class="chart-card" style="margin-top:18px;text-align:center;padding:28px 20px">
+    <div id="fgMeta" style="color:var(--muted);font-size:0.85rem;margin-bottom:18px">⏳ กำลังโหลดข้อมูล VIX...</div>
+
+    <div style="max-width:480px;margin:0 auto">
+      <div style="position:relative;height:18px;border-radius:9px;
+                  background:linear-gradient(90deg,#c0392b 0%,#e67e22 25%,#f1c40f 50%,#2ecc71 75%,#16a085 100%);">
+        <div id="fgPointer" style="position:absolute;top:-9px;left:0%;width:4px;height:36px;background:var(--text,#fff);
+                  border-radius:2px;box-shadow:0 0 6px rgba(0,0,0,0.5);transition:left 0.6s ease"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:var(--muted);margin-top:6px">
+        <span>กลัวสุดขีด</span><span>กลัว</span><span>กลาง ๆ</span><span>โลภ</span><span>โลภสุดขีด</span>
+      </div>
+    </div>
+
+    <div id="fgScoreLabel" class="mono" style="font-size:2.4rem;font-weight:700;margin-top:24px">—</div>
+    <div id="fgScoreText" style="font-size:1.1rem;color:var(--muted);margin-top:4px">—</div>
+
+    <div style="display:flex;justify-content:center;gap:32px;margin-top:24px;flex-wrap:wrap">
+      <div>
+        <div style="color:var(--muted);font-size:0.75rem">VIX ปัจจุบัน</div>
+        <div id="fgVixVal" class="mono" style="font-size:1.3rem;font-weight:700">—</div>
+      </div>
+      <div>
+        <div style="color:var(--muted);font-size:0.75rem">เปลี่ยนแปลง</div>
+        <div id="fgVixChange" class="mono" style="font-size:1.3rem;font-weight:700">—</div>
+      </div>
+    </div>
+
+    <div style="margin-top:24px;font-size:0.78rem;color:var(--muted);text-align:left;max-width:480px;margin-left:auto;margin-right:auto;line-height:1.6">
+      ดัชนีนี้คำนวณจาก CBOE Volatility Index (VIX) ซึ่งสะท้อนความผันผวนที่ตลาดคาดการณ์ในตลาดหุ้นสหรัฐฯ
+      โดยทั่วไป VIX ต่ำ = นักลงทุนมั่นใจ/โลภ, VIX สูง = นักลงทุนกังวล/กลัว
+      (ไม่ใช่ตัวเลขเดียวกับ Fear &amp; Greed Index ของ CNN ที่ใช้ 7 องค์ประกอบ แต่เป็นตัวชี้วัดความกลัวของตลาดที่ใช้กันแพร่หลายและดึงข้อมูลแบบเรียลไทม์ได้)
+    </div>
   </div>
 </div>
 </div>
