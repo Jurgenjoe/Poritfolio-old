@@ -217,61 +217,282 @@ function renderSummary() {
   `;
 }
 
-// ---- LINE CHART ----
+// ---- LINE CHART with timeframe selector ----
 let lineChartInst = null;
-function renderLineChart() {
+let currentLineChartTF = 'MAX';
+const PORTFOLIO_START = '2024-02-01'; // วันที่เริ่มออมจริง (1 ก.พ. 67)
+
+function getLineChartRange(tf) {
+  const today = new Date();
+  let from;
+  switch (tf) {
+    case '1W': from = new Date(today); from.setDate(today.getDate() - 7); break;
+    case '1M': from = new Date(today); from.setMonth(today.getMonth() - 1); break;
+    case '3M': from = new Date(today); from.setMonth(today.getMonth() - 3); break;
+    case '6M': from = new Date(today); from.setMonth(today.getMonth() - 6); break;
+    case 'YTD': from = new Date(today.getFullYear(), 0, 1); break;
+    case '1Y': from = new Date(today); from.setFullYear(today.getFullYear() - 1); break;
+    case 'MAX': default: from = new Date(PORTFOLIO_START); break;
+  }
+  // ไม่ย้อนก่อนวันเริ่มต้น
+  if (from < new Date(PORTFOLIO_START)) from = new Date(PORTFOLIO_START);
+  return from;
+}
+
+function renderLineChart(tf) {
+  if (tf) currentLineChartTF = tf;
+  // อัปเดตปุ่ม
+  document.querySelectorAll('.tf-btn').forEach(b =>
+    b.classList.toggle('tf-btn-active', b.dataset.tf === currentLineChartTF));
+
   const stocks = getStocks();
   const h = getHistory();
-  // Sum portfolio value over 30 days
   const today = new Date();
-  const labels = [], values = [];
-  for (let i = 29; i >= 0; i--) {
-    const d = new Date(today); d.setDate(d.getDate()-i);
-    const key = d.toISOString().slice(0,10);
-    labels.push(key.slice(5));
+  const todayKey = today.toISOString().slice(0, 10);
+  const fromDate = getLineChartRange(currentLineChartTF);
+
+  // สร้างวันเทรดทุกวัน จ-ศ ในช่วงนั้น
+  const allDates = [];
+  const cursor = new Date(fromDate);
+  while (cursor <= today) {
+    const dow = cursor.getDay();
+    if (dow >= 1 && dow <= 5) allDates.push(cursor.toISOString().slice(0, 10));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  // ลดจุดข้อมูลให้พอดีกราฟ (แสดงสูงสุดประมาณ 120 จุด)
+  let step = 1;
+  if (allDates.length > 500) step = 5;
+  else if (allDates.length > 250) step = 3;
+  else if (allDates.length > 120) step = 2;
+  const dates = allDates.filter((_, i) => i % step === 0 || i === allDates.length - 1);
+
+  // หาวันที่เร็วที่สุดที่มีข้อมูลใน price_history จริง
+  const allHistDates = new Set();
+  stocks.forEach(s => (h[s.ticker] || []).forEach(x => allHistDates.add(x.date)));
+  const hasRealDataOn = (key) => allHistDates.has(key);
+  const firstRealDate = [...allHistDates].sort()[0] || todayKey;
+
+  // คำนวณมูลค่าพอร์ตแต่ละวัน
+  const labels = [], values = [], pointColors = [];
+  let prevVal = null;
+
+  dates.forEach((dateKey) => {
     let dayVal = 0;
     stocks.forEach(s => {
-      const hist = (h[s.ticker]||[]).find(x=>x.date===key);
-      const p = hist ? hist.price : parseFloat(s.price);
-      dayVal += p * parseFloat(s.shares);
+      const hist = (h[s.ticker] || []).find(x => x.date === dateKey);
+      dayVal += (hist ? hist.price : parseFloat(s.price)) * parseFloat(s.shares);
     });
-    values.push(parseFloat((currency==='THB'? dayVal*THB_RATE : dayVal).toFixed(2)));
+    const displayVal = parseFloat((currency === 'THB' ? dayVal * THB_RATE : dayVal).toFixed(2));
+
+    // Format label ตาม timeframe
+    const d = new Date(dateKey);
+    let lbl;
+    if (currentLineChartTF === '1W') lbl = `${d.getDate()}/${d.getMonth() + 1}`;
+    else if (currentLineChartTF === '1M') lbl = `${d.getDate()}/${d.getMonth() + 1}`;
+    else if (currentLineChartTF === '3M') lbl = `${d.getDate()}/${d.getMonth() + 1}`;
+    else if (currentLineChartTF === '6M') lbl = `${d.getMonth() + 1}/${d.getDate()}`;
+    else lbl = `${d.getMonth() + 1}/${String(d.getFullYear()).slice(2)}`;
+
+    labels.push(lbl);
+    values.push(displayVal);
+    // สีจุด: เขียว = ขึ้น, แดง = ลง, เทา = ไม่มีข้อมูลจริง
+    const isReal = hasRealDataOn(dateKey) || dateKey === todayKey;
+    const isUp = prevVal === null || displayVal >= prevVal;
+    pointColors.push(isReal ? (isUp ? '#00e5a0' : '#ff4d6d') : 'rgba(90,100,120,0.4)');
+    prevVal = displayVal;
+  });
+
+  // % เปลี่ยนแปลงตั้งแต่ต้นช่วง
+  const pctChange = values.length > 1 && values[0] > 0
+    ? ((values[values.length - 1] - values[0]) / values[0] * 100).toFixed(2) : null;
+  const infoEl = document.getElementById('lineChartInfo');
+  if (infoEl && pctChange !== null) {
+    const sign = pctChange >= 0 ? '+' : '';
+    const col = pctChange >= 0 ? '#00e5a0' : '#ff4d6d';
+    infoEl.innerHTML = `ช่วงนี้: <span style="color:${col};font-weight:700;">${sign}${pctChange}%</span>
+      &nbsp;|&nbsp; เริ่มออม 1 ก.พ. 67 ด้วย $100
+      &nbsp;|&nbsp; ข้อมูลจริงตั้งแต่ ${firstRealDate}`;
   }
+
   const ctx = document.getElementById('lineChart').getContext('2d');
   if (lineChartInst) lineChartInst.destroy();
-  const grad = ctx.createLinearGradient(0,0,0,200);
-  grad.addColorStop(0,'rgba(0,229,160,0.25)');
-  grad.addColorStop(1,'rgba(0,229,160,0.0)');
+  const grad = ctx.createLinearGradient(0, 0, 0, 220);
+  grad.addColorStop(0, 'rgba(0,229,160,0.2)');
+  grad.addColorStop(1, 'rgba(0,229,160,0.0)');
+
   lineChartInst = new Chart(ctx, {
-    type:'line',
-    data:{
+    type: 'line',
+    data: {
       labels,
-      datasets:[{
-        label:'มูลค่าพอร์ต',
-        data:values,
-        borderColor:'#00e5a0',
-        backgroundColor:grad,
-        borderWidth:2,
-        pointRadius:2,
-        pointHoverRadius:5,
-        tension:0.4,
-        fill:true
+      datasets: [{
+        label: 'มูลค่าพอร์ต',
+        data: values,
+        borderColor: '#00e5a0',
+        backgroundColor: grad,
+        borderWidth: 1.5,
+        pointRadius: dates.length > 60 ? 0 : 2, // ซ่อนจุดถ้ามีข้อมูลเยอะ
+        pointHoverRadius: 5,
+        pointBackgroundColor: pointColors,
+        tension: 0.3,
+        fill: true
       }]
     },
-    options:{
-      responsive:true,
-      plugins:{ legend:{display:false}, tooltip:{ callbacks:{
-        label: ctx => (currency==='THB'?'฿':'$') + fmt(ctx.parsed.y)
-      }}},
-      scales:{
-        x:{ grid:{color:'rgba(255,255,255,0.04)'}, ticks:{color:'#5a6478',font:{size:10},maxTicksLimit:6}},
-        y:{ grid:{color:'rgba(255,255,255,0.04)'}, ticks:{color:'#5a6478',font:{size:10},callback:v=>(currency==='THB'?'฿':'$')+fmt(v,0)}}
+    options: {
+      responsive: true,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            title: (items) => {
+              const idx = items[0].dataIndex;
+              return dates[idx] || items[0].label;
+            },
+            label: (item) => {
+              const cur = currency === 'THB' ? '฿' : '$';
+              const val = item.parsed.y;
+              const prev = item.dataIndex > 0 ? values[item.dataIndex - 1] : val;
+              const chg = prev > 0 ? ((val - prev) / prev * 100).toFixed(2) : '0.00';
+              const sign = chg >= 0 ? '+' : '';
+              return `${cur}${fmt(val)}  (${sign}${chg}%)`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          grid: { color: 'rgba(255,255,255,0.04)' },
+          ticks: { color: '#5a6478', font: { size: 10 }, maxTicksLimit: 7 }
+        },
+        y: {
+          grid: { color: 'rgba(255,255,255,0.04)' },
+          ticks: {
+            color: '#5a6478', font: { size: 10 },
+            callback: v => (currency === 'THB' ? '฿' : '$') + fmt(v, 0)
+          }
+        }
       }
     }
   });
 }
 
-// ---- PIE CHART ----
+
+
+// ---- WEEKLY PORTFOLIO % CHANGE TABLE (จ-ศ ย้อนหลัง) ----
+function renderWeeklyChange() {
+  const stocks = getStocks();
+  const h = getHistory();
+  const weeksBack = parseInt(document.getElementById('weeklyWeeksSelect')?.value || '4');
+
+  // สร้างรายการ วัน จ-ศ ย้อนหลัง N สัปดาห์
+  const days = [];
+  const today = new Date();
+  // ย้อนไปจนครบ weeksBack สัปดาห์ + buffer เผื่อ
+  for (let i = weeksBack * 7 + 7; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(today.getDate() - i);
+    const dow = d.getDay(); // 0=อาทิตย์ 6=เสาร์
+    if (dow >= 1 && dow <= 5) days.push(d.toISOString().slice(0, 10));
+  }
+  // เอาแค่ weeksBack*5 วันล่าสุด (จ-ศ)
+  const tradingDays = days.slice(-weeksBack * 5);
+
+  // คำนวณ มูลค่าพอร์ตแต่ละวัน
+  function portfolioValue(dateKey) {
+    let val = 0;
+    stocks.forEach(s => {
+      const hist = (h[s.ticker] || []).find(x => x.date === dateKey);
+      const p = hist ? hist.price : parseFloat(s.price);
+      val += p * parseFloat(s.shares);
+    });
+    return val;
+  }
+
+  // สร้าง map value ทุกวัน
+  const valMap = {};
+  // ต้องการวันก่อนหน้าวันแรกด้วย (เพื่อคำนวณ % วันแรก)
+  const prevDay = (() => {
+    const d = new Date(tradingDays[0]);
+    d.setDate(d.getDate() - 1);
+    let tries = 0;
+    while (d.getDay() === 0 || d.getDay() === 6) { d.setDate(d.getDate() - 1); if (++tries > 5) break; }
+    return d.toISOString().slice(0, 10);
+  })();
+  [prevDay, ...tradingDays].forEach(k => { valMap[k] = portfolioValue(k); });
+
+  // จัดกลุ่มเป็นสัปดาห์ (จ-ศ)
+  const weeks = [];
+  for (let i = 0; i < tradingDays.length; i += 5) {
+    weeks.push(tradingDays.slice(i, i + 5));
+  }
+
+  // header: วันในสัปดาห์
+  const DOW_TH = ['', 'จ.', 'อ.', 'พ.', 'พฤ.', 'ศ.'];
+  const head = document.getElementById('weeklyChangeHead');
+  head.innerHTML = `<th style="padding:5px 8px;text-align:left;color:#5a6478;">สัปดาห์</th>` +
+    DOW_TH.slice(1).map(d => `<th style="padding:5px 8px;text-align:right;color:#5a6478;">${d}</th>`).join('') +
+    `<th style="padding:5px 8px;text-align:right;color:#5a6478;">รวม/สัปดาห์</th>`;
+
+  const tbody = document.getElementById('weeklyChangeBody');
+  tbody.innerHTML = '';
+
+  weeks.forEach((week, wi) => {
+    const firstDate = new Date(week[0]);
+    const label = `${firstDate.getDate()}/${firstDate.getMonth() + 1}`;
+    let weekStartVal = valMap[prevDay]; // ค่าเริ่มต้นของสัปดาห์แรก ใช้วันก่อนหน้า
+    if (wi > 0) {
+      // สัปดาห์ถัดไป ใช้ค่าสิ้นสัปดาห์ก่อน (ศ. ของสัปดาห์ก่อน)
+      const prevWeekFri = weeks[wi - 1][4] || weeks[wi - 1][weeks[wi - 1].length - 1];
+      weekStartVal = valMap[prevWeekFri];
+    }
+
+    const cells = week.map((dateKey, di) => {
+      const prevKey = di === 0
+        ? (wi === 0 ? prevDay : (weeks[wi - 1][4] || weeks[wi - 1][weeks[wi - 1].length - 1]))
+        : week[di - 1];
+      const curVal = valMap[dateKey];
+      const prvVal = valMap[prevKey];
+      const pct = prvVal > 0 ? ((curVal - prvVal) / prvVal) * 100 : null;
+
+      // ตรวจว่าวันนี้มีข้อมูลราคาจริงไหม (ไม่ใช่ราคาปัจจุบันที่ fallback มา)
+      const hasRealData = stocks.some(s => (h[s.ticker] || []).some(x => x.date === dateKey));
+      const isFuture = dateKey > today.toISOString().slice(0, 10);
+
+      if (isFuture) return `<td style="padding:5px 8px;text-align:right;color:#2a2e3a;">-</td>`;
+      if (pct === null || !hasRealData) return `<td style="padding:5px 8px;text-align:right;color:#5a6478;">N/A</td>`;
+
+      const color = pct > 0 ? '#00e5a0' : pct < 0 ? '#ff4d6d' : '#5a6478';
+      const sign = pct > 0 ? '+' : '';
+      return `<td style="padding:5px 8px;text-align:right;color:${color};font-weight:600;">${sign}${pct.toFixed(2)}%</td>`;
+    });
+
+    // % รวมทั้งสัปดาห์ (เทียบ ศ. กับ จ. ของสัปดาห์นั้น โดยใช้ค่าก่อนหน้า)
+    const weekEndVal = valMap[week[week.length - 1]];
+    const weekPct = weekStartVal > 0 ? ((weekEndVal - weekStartVal) / weekStartVal) * 100 : null;
+    const hasWeekData = stocks.some(s => (h[s.ticker] || []).some(x => week.includes(x.date)));
+    let weekTotal = `<td style="padding:5px 8px;text-align:right;color:#5a6478;">N/A</td>`;
+    if (weekPct !== null && hasWeekData) {
+      const wcolor = weekPct > 0 ? '#00e5a0' : weekPct < 0 ? '#ff4d6d' : '#5a6478';
+      const wsign = weekPct > 0 ? '+' : '';
+      weekTotal = `<td style="padding:5px 8px;text-align:right;color:${wcolor};font-weight:700;border-left:1px solid #1e2330;">${wsign}${weekPct.toFixed(2)}%</td>`;
+    }
+
+    // เติมช่องว่างถ้าสัปดาห์ไม่ครบ 5 วัน
+    const padded = [...cells];
+    while (padded.length < 5) padded.push(`<td style="padding:5px 8px;text-align:right;color:#2a2e3a;">-</td>`);
+
+    const isCurrentWeek = wi === weeks.length - 1;
+    const rowBg = isCurrentWeek ? 'background:rgba(0,229,160,0.04);' : '';
+    tbody.innerHTML += `<tr style="${rowBg}border-bottom:1px solid #1e2330;">
+      <td style="padding:5px 8px;color:#5a6478;white-space:nowrap;">${label}</td>
+      ${padded.join('')}
+      ${weekTotal}
+    </tr>`;
+  });
+}
+
+
 let pieChartInst = null;
 function renderPieChart() {
   const stocks = getStocks();
@@ -965,6 +1186,7 @@ function renderAll() {
   renderSummary();
   renderLineChart();
   renderPieChart();
+  renderWeeklyChange();
   renderTable();
   initLivePrices();
   updateTape();

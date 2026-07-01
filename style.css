@@ -831,3 +831,19 @@
 .gold-price-box-label { font-size: 0.68rem; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; font-family: var(--font-mono); }
 .gold-price-box-val { font-family: var(--font-mono); font-weight: 700; font-size: 1rem; color: var(--green); }
 .gold-price-meta { font-size: 0.72rem; color: var(--muted); display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+
+/* Timeframe selector buttons */
+.tf-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: .72rem;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all .15s;
+  font-family: var(--font-mono);
+}
+.tf-btn:hover { border-color: var(--green); color: var(--green); }
+.tf-btn-active { background: var(--green); color: #04110c !important; border-color: var(--green) !important; }
